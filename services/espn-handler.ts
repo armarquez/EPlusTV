@@ -173,6 +173,9 @@ const REFRESH_AUTH_URL = '/{id-provider}/guest/refresh-auth?langPref=en-US';
 const BAM_API_KEY = 'ZXNwbiZicm93c2VyJjEuMC4w.ptUt7QxsteaRruuPmGZFaJByOoqKvDP2a5YkInHrc7c';
 const BAM_APP_CONFIG =
   'https://bam-sdk-configs.bamgrid.com/bam-sdk/v2.0/espn-a9b93989/browser/v3.4/linux/chrome/prod.json';
+const BAM_CLIENT_ID = 'espn-a9b93989';
+const BAM_SDK_VERSION = '32.5';
+const BAM_DEVICE_GRAPHQL_ENDPOINT = 'https://espn.api.edge.bamgrid.com/graph/v1/device/graphql';
 
 const LINEAR_NETWORKS = ['espn1', 'espn2', 'espnu', 'sec', 'acc', 'espnews'];
 
@@ -629,6 +632,12 @@ class EspnHandler {
 
     if (!this.appConfig) {
       await this.getAppConfig();
+    }
+
+    // Auto-detect ESPN Ultimate subscription if not already enabled
+    if (!plusMeta?.ultimate_subscription && (await isEnabled('plus'))) {
+      console.log('Attempting to auto-detect ESPN Ultimate subscription...');
+      await this.detectUltimateSubscription();
     }
   };
 
@@ -1224,6 +1233,101 @@ class EspnHandler {
     } catch (e) {
       console.error(e);
       console.log('Could not refresh in-market teams data!');
+    }
+  };
+
+  public detectUltimateSubscription = async (): Promise<boolean> => {
+    try {
+      console.log('🎯 Detecting ESPN Ultimate subscription via entitlements...');
+
+      // Check if we have ESPN+ enabled with BAM tokens
+      const {enabled: espnPlusEnabled, tokens: plusTokens} = await db.providers.findOneAsync<
+        IProvider<TESPNPlusTokens, IEspnPlusMeta>
+      >({name: 'espnplus'});
+
+      if (!espnPlusEnabled || !plusTokens?.tokens?.id_token) {
+        console.log('Cannot detect Ultimate: ESPN+ not enabled or no BAM tokens');
+        return false;
+      }
+
+      // Ensure we have the necessary tokens
+      await this.getBamAccessToken();
+
+      if (!this.account_token) {
+        console.log('Cannot detect Ultimate: Missing BAM account token');
+        return false;
+      }
+
+      // Query the BAM device GraphQL endpoint to get entitlements using account access token
+      const entitlementsQuery = {
+        operationName: 'refreshToken',
+        query: `
+          mutation refreshToken($input: RefreshTokenInput!) {
+            refreshToken(refreshToken: $input) {
+              activeSession {
+                sessionId
+              }
+            }
+          }
+        `,
+        variables: {
+          input: {
+            refreshToken:
+              this.account_token?.refresh_token ||
+              this.device_refresh_token?.refresh_token ||
+              plusTokens?.device_refresh_token?.refresh_token,
+          },
+        },
+      };
+
+      try {
+        const {data: refreshResponse} = await axios.post(BAM_DEVICE_GRAPHQL_ENDPOINT, entitlementsQuery, {
+          headers: {
+            Authorization: BAM_API_KEY,
+            'Content-Type': 'application/json',
+            'User-Agent': userAgent,
+            'x-bamsdk-client-id': BAM_CLIENT_ID,
+            'x-bamsdk-platform': 'javascript/browser/chrome',
+            'x-bamsdk-version': BAM_SDK_VERSION,
+          },
+        });
+
+        // Check if the response contains entitlements data
+        const entitlements = refreshResponse?.extensions?.sdk?.session?.entitlements;
+
+        if (entitlements && Array.isArray(entitlements)) {
+          console.log('✅ Retrieved entitlements:', entitlements);
+
+          // Check for ESPN Ultimate/Flagship entitlements
+          const hasUltimate = entitlements.some(
+            entitlement =>
+              entitlement === 'ESPN_FLAGSHIP' || entitlement === 'espn:flagship' || entitlement.includes('flagship'),
+          );
+
+          if (hasUltimate) {
+            console.log('✅ ESPN Ultimate subscription detected: Found ESPN_FLAGSHIP entitlement');
+
+            // Auto-enable Ultimate subscription
+            await db.providers.updateAsync({name: 'espnplus'}, {$set: {'meta.ultimate_subscription': true}});
+
+            console.log('🔧 ESPN Ultimate subscription automatically enabled');
+            return true;
+          } else {
+            console.log('❌ ESPN Ultimate not found in entitlements');
+            console.log('   Available entitlements:', entitlements);
+            return false;
+          }
+        } else {
+          console.log('❌ No entitlements data found in response');
+          return false;
+        }
+      } catch (bamError) {
+        console.log('❌ Failed to query BAM entitlements endpoint:', bamError.message);
+        return false;
+      }
+    } catch (e) {
+      console.log('Could not detect Ultimate subscription:', e.message);
+      return false;
     }
   };
 

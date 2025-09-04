@@ -51,22 +51,6 @@ espnplus.put('/toggle-ppv', async c => {
   return c.html(<ESPNPlusBody enabled={enabled} tokens={tokens} />);
 });
 
-espnplus.put('/toggle-ultimate', async c => {
-  const body = await c.req.parseBody();
-  const ultimate_subscription = body['espnplus-ultimate-enabled'] === 'on';
-
-  const {affectedDocuments} = await db.providers.updateAsync<IProvider<TESPNPlusTokens, IEspnPlusMeta>, any>(
-    {name: 'espnplus'},
-    {$set: {'meta.ultimate_subscription': ultimate_subscription}},
-    {returnUpdatedDocs: true},
-  );
-  const {enabled, tokens} = affectedDocuments as IProvider<TESPNPlusTokens, IEspnPlusMeta>;
-
-  scheduleEvents();
-
-  return c.html(<ESPNPlusBody enabled={enabled} tokens={tokens} />);
-});
-
 espnplus.put('/refresh-in-market-teams', async c => {
   const {zip_code, in_market_teams} = await espnHandler.refreshInMarketTeams();
 
