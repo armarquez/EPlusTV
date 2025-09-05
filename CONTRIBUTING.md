@@ -62,12 +62,12 @@ npx ts-node -r tsconfig-paths/register debug/quick-test.ts
 ```bash
 # Test a specific handler method with proper error handling
 npx ts-node -r tsconfig-paths/register -e "
-import {espnHandler} from './services/espn-handler';
+import {exampleProviderHandler} from './services/example-provier-handler';
 
 async function test() {
   try {
-    await espnHandler.initialize();
-    await espnHandler.getSchedule();
+    await exampleProviderHandler.initialize();
+    await exampleProviderHandler.getSchedule();
     console.log('✅ Test completed successfully');
   } catch (error) {
     console.error('❌ Test failed:', error.message);
@@ -85,7 +85,7 @@ test();
 npx tsc --noEmit
 
 # Lint specific files
-npx eslint services/espn-handler.ts --fix
+npx eslint services/kbo-handler.ts --fix
 
 # Format code
 npx prettier --write services/
@@ -123,7 +123,7 @@ if (require.main === module) {
 
 ## Reverse Engineering Streaming Services
 
-When adding support for a new streaming provider (e.g., Peacock), use these tools to understand their API structure:
+When adding support for a new content provider, use these tools to understand their API structure:
 
 ### Browser-Based Analysis
 
@@ -163,7 +163,7 @@ mitmproxy -p 8080
 
 ```bash
 # Test API endpoints discovered through browser analysis
-curl -H "Authorization: Bearer TOKEN" "https://api.peacocktv.com/schedule"
+curl -H "Authorization: Bearer TOKEN" "https://api.example.com/schedule"
 
 # Parse JSON responses
 curl "https://api.example.com/schedule" | jq '.events[] | {title, start_time, stream_url}'
@@ -175,7 +175,7 @@ curl "https://example.com/playlist.m3u8" | head -20
 ffprobe -v quiet -print_format json -show_format "stream_url_here"
 
 # Test with yt-dlp (already in dependencies)
-yt-dlp --list-formats "https://peacocktv.com/watch/video-id"
+yt-dlp --list-formats "https://example.com/watch/video-id"
 ```
 
 ### Specialized Tools
@@ -205,7 +205,7 @@ axios.get('PLAYLIST_URL').then(response => {
 npm install -D playwright
 
 # Example script to automate login and capture network traffic
-npx playwright codegen --target javascript peacocktv.com
+npx playwright codegen --target javascript example.com
 ```
 
 ## Adding a New Provider
@@ -238,7 +238,7 @@ ls -la config/
 # Test database connection
 npx ts-node -r tsconfig-paths/register -e "
 import {db} from './services/database';
-db.providers.findOneAsync({name: 'espnplus'}).then(console.log);
+db.providers.findOneAsync({name: 'example-provider'}).then(console.log);
 "
 
 # Check for missing dependencies
@@ -249,12 +249,12 @@ npm install
 
 ```bash
 # Test token validity
-npx ts-node -r tsconfig-paths/register debug/espn-handler/test-espn-handler.ts refreshTokens
+npx ts-node -r tsconfig-paths/register debug/example-provider-handler/test-example-provider-handler.ts refreshTokens
 
 # Check stored credentials
 npx ts-node -r tsconfig-paths/register -e "
 import {db} from './services/database';
-db.providers.findOneAsync({name: 'espnplus'}).then(result => {
+db.providers.findOneAsync({name: 'example-provider'}).then(result => {
   console.log('Provider config:', result);
 });
 "
@@ -264,7 +264,7 @@ db.providers.findOneAsync({name: 'espnplus'}).then(result => {
 
 ```bash
 # Test network connectivity to provider APIs
-curl -I "https://api.espn.com"
+curl -I "https://api.example.com"
 
 # Enable debug output (modify debug/quick-test.ts)
 # Add console.log statements to trace API calls
@@ -277,28 +277,8 @@ curl -I "https://api.espn.com"
 npx tsc --noEmit
 
 # Check path resolution
-npx ts-node -r tsconfig-paths/register -e "console.log(require.resolve('./services/espn-handler'))"
+npx ts-node -r tsconfig-paths/register -e "console.log(require.resolve('./services/example-provider-handler'))"
 ```
-
-## Testing ESPN Ultimate Subscription
-
-**📖 For comprehensive ESPN Ultimate testing and authentication details, see [debug/README.md](./debug/README.md#testing-with-real-espn-authentication)**
-
-ESPN Ultimate allows BAM token authentication for linear channels instead of traditional Adobe Pass authentication.
-
-**Quick Test Commands:**
-```bash
-# Test Ultimate authentication flow
-npx ts-node -r tsconfig-paths/register debug/espn-handler/test-ultimate-linear.ts
-
-# Test Ultimate functionality
-npx ts-node -r tsconfig-paths/register debug/espn-handler/test-espn-handler.ts testUltimate
-```
-
-**Setup Methods:**
-- **Web UI**: Login at http://localhost:8000 (recommended)
-- **Token Extraction**: See debug/README.md for browser extraction methods
-- **Direct Injection**: Database token injection scripts in debug/README.md
 
 ## Interactive Debugging (Similar to Python's pdb)
 
@@ -308,7 +288,7 @@ The project includes VS Code debug configurations. Set breakpoints in your code 
 
 1. Open any TypeScript file in VS Code
 2. Set breakpoints by clicking in the gutter  
-3. Press F5 and select "Debug ESPN Handler" or "Debug Quick Test"
+3. Press F5 and select "Debug Quick Test"
 4. Use the debug console to inspect variables and execute code
 
 ### Method 2: Node.js Built-in Debugger
@@ -331,8 +311,8 @@ For a Python pdb-like experience:
 # Start interactive debugger with loaded context
 npx ts-node -r tsconfig-paths/register debug/interactive-debug.ts
 
-# This gives you a REPL with espnHandler and db already loaded
-debug> await espnHandler.getSchedule()
+# This gives you a REPL with exampleProviderHandler and db already loaded
+debug> await exampleProviderHandler.getSchedule()
 debug> await db.providers.findAsync({})
 debug> .exit
 ```
@@ -346,7 +326,7 @@ Install and use ndb for the closest pdb experience:
 npm install -g ndb
 
 # Run any script with ndb (opens Chrome DevTools)
-ndb npx ts-node -r tsconfig-paths/register debug/espn-handler/test-espn-handler.ts initialize
+ndb npx ts-node -r tsconfig-paths/register debug/example-provider-handler/test-example-provider-handler.ts initialize
 ```
 
 ## Analysis Strategy

@@ -4,29 +4,25 @@ This document provides a detailed overview of the EPlusTV application's architec
 
 ## Core Concepts
 
-EPlusTV's primary function is to aggregate sports streams from various providers and present them as standard IPTV channels, complete with M3U playlists and XMLTV electronic program guides (EPG).
+EPlusTV's primary function is to aggregate content from various providers and present them as standard IPTV channels, complete with M3U playlists and XMLTV electronic program guides (EPG).
 
-### Streaming Model: The Proxy Server
+### Data flow: Data broker
 
-A crucial concept to understand is that **this server acts as a proxy for all video streams**. The client (e.g., VLC, Kodi, Channels DVR) never connects directly to the source provider (like ESPN or MLB).
-
-The data flow for streaming is as follows:
+The data flow for EPlusTV is as follows:
 
 1.  **M3U Playlist Request**: The client requests the channel playlist (`/channels.m3u`) from the EPlusTV server.
 2.  **Playlist Generation**: The server generates this M3U file. The URLs for each channel inside this file point *back to the EPlusTV server itself* (e.g., `http://<server_ip>/channels/101.m3u8`).
 3.  **Channel Selection**: The user selects a channel in their client. The client then requests the corresponding `.m3u8` URL from the EPlusTV server.
 4.  **Stream Launch**: This request hits the EPlusTV server, which identifies the currently scheduled event for that virtual channel.
-5.  **Provider Connection**: The server uses the appropriate provider "handler" to fetch the *actual* HLS stream manifest URL from the source (e.g., ESPN's servers). This involves using the stored authentication tokens for that provider.
-6.  **Manifest Rewriting (Proxying)**: The server fetches the provider's HLS manifest. It then **rewrites** all the URLs for the video segments (`.ts` files) inside the manifest to also point back to the EPlusTV server.
+5.  **Provider Connection**: The server uses the appropriate provider "handler" to fetch the *actual* HLS stream manifest URL from the source (e.g., provider's servers). This involves using the stored authentication artifacts for that provider.
+6.  **Manifest Rewriting (Broker)**: The server fetches the provider's HLS manifest. It then rewrites all the URLs for the video segments (`.ts` files) inside the manifest to also point back to the EPlusTV server.
 7.  **Client Playback**: The rewritten manifest is sent to the client. The client then requests each video segment from the EPlusTV server, which in turn fetches it from the provider and streams it to the client.
-
-This proxy model is why authentication is handled on the server-side; it needs to act as an authenticated client on behalf of the user.
 
 ```mermaid
 sequenceDiagram
     participant Client as IPTV Client (VLC, etc.)
     participant Server as EPlusTV Server
-    participant Provider as Provider API (ESPN, etc.)
+    participant Provider as Provider API
 
     Client->>Server: 1. GET /channels.m3u
     Server->>Client: 2. M3U Playlist (URLs point to EPlusTV)
@@ -38,7 +34,7 @@ sequenceDiagram
     Provider-->>Server: 6. Original HLS Manifest URL
     Server->>Provider: 7. GET HLS Manifest
     Provider-->>Server: 8. HLS Manifest Content
-    Server->>Server: 9. Rewrite segment URLs to proxy
+    Server->>Server: 9. Rewrite segment URLs to broker
     Server-->>Client: 10. Rewritten HLS Manifest
     deactivate Server
 
@@ -91,7 +87,7 @@ The project is a Node.js application written in TypeScript, using Hono for the w
 -   `views/`: Contains the main layout components for the web UI (header, styles, etc.).
 -   `services/`: This is the heart of the backend logic.
     -   It contains individual `[provider]-handler.ts` files for each streaming provider.
-    -   It also contains core services for scheduling, playlist generation, and the streaming proxy itself.
+    -   It also contains core services for scheduling, playlist generation, and the content brokering.
 -   `services/providers/`: This directory contains the **frontend UI and backend route handling** for the admin panel's provider configuration cards.
     -   Each subdirectory corresponds to a provider.
     -   `[provider]/index.tsx`: Defines the Hono routes for handling UI interactions (e.g., toggling the provider, submitting login forms).
@@ -101,20 +97,20 @@ The project is a Node.js application written in TypeScript, using Hono for the w
 
 ### Backend Logic (`services/`)
 
--   **`services/[provider]-handler.ts`** (e.g., `espn-handler.ts`, `mlb-handler.ts`)
+-   **`services/[provider]-handler.ts`** (e.g., `flo-handler.ts`)
     -   **Role**: Contains all logic for a single provider. This is the primary file to edit when fixing a provider or adding a new one.
     -   **Key Methods**:
-        -   `initialize()`: Sets up the provider, loading tokens from the database.
-        -   `refreshTokens()`: Logic to refresh expired authentication tokens.
+        -   `initialize()`: Sets up the provider, loading auth artifacts from the database.
+        -   `refreshTokens()`: Logic to refresh expired auth artifacts.
         -   `getSchedule()`: Fetches the schedule of events from the provider's API and stores them in the `entries.db` database.
         -   `getEventData(eventId)`: The most critical method for streaming. Given an event ID, it performs the necessary API calls to get the master HLS manifest URL from the provider.
 
 -   **`services/launch-channel.ts`**
-    -   **Role**: Manages the HLS proxying. It's triggered when a client requests a `.m3u8` file.
+    -   **Role**: Manages the HLS brokering. It's triggered when a client requests a `.m3u8` file.
     -   **Functionality**: It finds the correct provider handler for the current event, calls its `getEventData()` method, and then uses `PlaylistHandler` to fetch and rewrite the manifest.
 
 -   **`services/playlist-handler.ts`**
-    -   **Role**: The low-level HLS manifest parser and rewriter. It replaces segment and key URLs with URLs that point back to the EPlusTV server, enabling the proxy.
+    -   **Role**: The low-level HLS manifest parser and rewriter. It replaces segment and key URLs with URLs that point back to the EPlusTV server, enabling the data brokering.
 
 -   **`services/generate-m3u.ts` & `services/generate-xmltv.ts`**
     -   **Role**: These files are responsible for generating the M3U playlist and XMLTV guide data based on the scheduled events in the database.
@@ -130,11 +126,11 @@ The project is a Node.js application written in TypeScript, using Hono for the w
 -   **`services/providers/index.ts`**
     -   **Role**: This file aggregates all the individual provider route handlers and exports them as a single Hono app to be mounted by the main `index.tsx`.
 
--   **`services/providers/[provider]/index.tsx`** (e.g., `services/providers/espn/index.tsx`)
+-   **`services/providers/[provider]/index.tsx`** (e.g., `services/providers/bally/index.tsx`)
     -   **Role**: Defines the API routes for a specific provider's UI card. It handles `PUT` and `POST` requests from the frontend, typically triggered by HTMX.
-    -   **Functionality**: Handles toggling the provider on/off, processing login forms, and updating settings. It calls the corresponding handler's methods (e.g., `espnHandler.authenticateLinearRegCode()`) and returns updated JSX components to the browser.
+    -   **Functionality**: Handles toggling the provider on/off, processing login forms, and updating settings. It calls the corresponding handler's methods and returns updated JSX components to the browser.
 
--   **`services/providers/[provider]/views/`** (e.g., `services/providers/espn/views/`)
+-   **`services/providers/[provider]/views/`** (e.g., `services/providers/bally/views/`)
     -   **Role**: Contains the actual JSX components that make up the UI for a provider's card.
     -   **Key Components**:
         -   `index.tsx`: The main card component.
@@ -143,45 +139,7 @@ The project is a Node.js application written in TypeScript, using Hono for the w
 
 ## Authentication Architecture Deep Dive
 
-### Multi-Token Authentication Systems
-
-Modern streaming providers often use complex authentication requiring multiple token types and flows. ESPN serves as the prime example of this complexity:
-
-#### ESPN Authentication Model
-ESPN uses a **dual authentication system**:
-
-1. **BAM Tokens** (Disney+ Integration):
-   - `access_token`, `refresh_token`, `id_token` for Disney+ ecosystem
-   - Used for ESPN+ on-demand content
-   - **ESPN Ultimate**: Premium subscribers can use BAM tokens for linear channels
-   - Stored in both database (`providers` collection) and `config/espn_plus_tokens.json`
-
-2. **Adobe Pass Tokens** (Traditional TV Provider):
-   - `adobe_device_id`, `adobe_auth` for TV provider verification  
-   - Used for linear ESPN channels (ESPN1, ESPN2, ESPNU, etc.)
-   - Stored in both database and `config/espn_linear_tokens.json`
-
-#### Authentication Flow Implementation
-```typescript
-// Example from services/espn-handler.ts
-async getEventData(eventId: string) {
-  const ultimateEnabled = await isEnabled('ultimate');
-  const isLinearChannel = scenarios?.data?.airing?.network?.id && 
-    LINEAR_NETWORKS.some(n => n === scenarios?.data?.airing?.network?.id);
-
-  if (isEspnPlus || (ultimateEnabled && isLinearChannel)) {
-    // Use BAM authentication for ESPN+ or Ultimate linear channels
-    await this.getBamAccessToken();
-    // ... BAM authentication flow
-  } else if (isLinearChannel) {
-    // Use Adobe Pass for traditional linear channels
-    await this.refreshAdobeTokens();
-    // ... Adobe Pass authentication flow  
-  }
-}
-```
-
-#### Token Persistence Strategy
+### Token Persistence Strategy
 All handlers implement **dual persistence**:
 - **Database**: NeDB providers collection for runtime access
 - **JSON Files**: Config directory for backup/recovery
@@ -212,7 +170,7 @@ class ProviderHandler {
     // Store in entries.db
   }
 
-  // 4. Stream Access - Critical for HLS proxy
+  // 4. Stream Access - Critical for data brokering
   async getEventData(eventId: string): Promise<TChannelPlaybackInfo> {
     // Choose authentication method
     // Fetch HLS manifest URL
@@ -274,36 +232,6 @@ interface IProvider<TTokens, TMeta> {
   meta?: TMeta;          // Provider-specific configuration
 }
 
-// Real ESPN+ example:
-{
-  name: 'espnplus',
-  enabled: true,
-  tokens: {
-    tokens: {
-      access_token: 'eyJ0eXAiOiJKV1QiLCJhbGci...',
-      refresh_token: 'eyJ0eXAiOiJKV1QiLCJhbGci...',
-      id_token: 'eyJ0eXAiOiJKV1QiLCJhbGci...',
-      expires_in: 3600,
-      ttl: 1734567890123,
-      refresh_ttl: 1734571490123,
-      swid: '{12345678-1234-1234-1234-123456789012}'
-    },
-    device_grant: {
-      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-      assertion: 'eyJ0eXAiOiJKV1QiLCJhbGci...'
-    },
-    // ... other BAM authentication tokens
-  },
-  meta: {
-    use_ppv: false,
-    hide_studio: false,
-    zip_code: '10001',
-    in_market_teams: 'NYY,NYM',
-    ultimate_subscription: false  // ESPN Ultimate premium feature
-  }
-}
-```
-
 #### `entries` Collection - Raw Event Data
 ```typescript
 interface IEntry {
@@ -356,7 +284,7 @@ graph TD
         
         Q --> R[Find Current Event]
         R --> S[Handler.getEventData]
-        S --> T[HLS Proxy]
+        S --> T[HLS Broker]
     end
 
     A --> E
@@ -368,32 +296,7 @@ graph TD
 
 ### Debug Infrastructure
 
-The `debug/` directory provides comprehensive testing tools:
-
-#### ESPN Handler Debug Scripts (`debug/espn-handler/`)
-
-**📖 For complete debugging guide and token setup instructions, see [debug/README.md](./debug/README.md)**
-
-- **Organized by Provider**: ESPN scripts separated for clarity
-- **Real Authentication Testing**: Scripts for testing with actual credentials
-- **Comprehensive Coverage**: All authentication flows and edge cases
-
-```bash
-# Test ESPN Ultimate authentication
-npx ts-node -r tsconfig-paths/register debug/espn-handler/test-ultimate-linear.ts
-
-# Test with real tokens (requires token setup - see debug/README.md)
-npx ts-node -r tsconfig-paths/register debug/espn-handler/test-with-real-tokens.ts
-```
-
-#### Interactive Debugging
-```bash
-# Python pdb-like debugging experience
-npx ts-node -r tsconfig-paths/register debug/interactive-debug.ts
-
-# VS Code debugging (recommended)
-# Set breakpoints and press F5 - configurations in .vscode/launch.json
-```
+The `debug/` directory provides comprehensive testing tools.
 
 ### Common Debugging Patterns
 
@@ -401,8 +304,8 @@ npx ts-node -r tsconfig-paths/register debug/interactive-debug.ts
 
 **Issue Pattern**: Provider features may depend on both global settings and provider-specific configuration.
 
-**Example**: ESPN Ultimate linear channels require:
-1. Global `use_linear` setting OR ESPN Ultimate subscription enabled
+**Example**: Example Provider premium linear channels require:
+1. Global `use_linear` setting OR premium subscription enabled
 2. Provider-specific linear channels enabled
 3. Individual channel toggles enabled
 
@@ -410,7 +313,7 @@ npx ts-node -r tsconfig-paths/register debug/interactive-debug.ts
 ```typescript
 // Check global settings first
 const useLinear = await usesLinear();
-const ultimateEnabled = await isEnabled('ultimate');
+const premiumEnabled = await isEnabled('premium');
 
 // Check provider-specific settings
 const {enabled: providerEnabled, linear_channels} = await db.providers.findOneAsync({name: 'provider'});
@@ -418,12 +321,12 @@ const hasEnabledChannels = _.some(linear_channels, c => c.enabled);
 
 // Debug output for complex logic
 console.log('Global linear:', useLinear);
-console.log('Ultimate enabled:', ultimateEnabled);
+console.log('Premium enabled:', premiumEnabled);
 console.log('Provider enabled:', providerEnabled);
 console.log('Has enabled channels:', hasEnabledChannels);
 
 // Combined logic
-const shouldProcess = (useLinear || ultimateEnabled) && providerEnabled && hasEnabledChannels;
+const shouldProcess = (useLinear || premiumEnabled) && providerEnabled && hasEnabledChannels;
 ```
 
 #### Database Entry Investigation
@@ -468,43 +371,25 @@ if (isSpecialCase && featureEnabled && !globalSetting) {
 }
 ```
 
-This pattern helped identify that ESPN Ultimate was correctly processing linear events even when global linear was disabled.
-
 ### Common Development Patterns
 
 #### Provider Toggle Implementation
 ```typescript
 // UI Route Handler Pattern
-provider.put('/toggle-ultimate', async c => {
+provider.put('/toggle-premium', async c => {
   const body = await c.req.parseBody();
-  const ultimate_subscription = body['feature-enabled'] === 'on';
+  const premium_subscription = body['feature-enabled'] === 'on';
   
   // Update database with new setting
   await db.providers.updateAsync(
-    {name: 'espnplus'}, 
-    {$set: {'meta.ultimate_subscription': ultimate_subscription}}
+    {name: 'example-provider'}, 
+    {$set: {'meta.premium_subscription': premium_subscription}}
   );
   
   // Return updated UI component
-  const provider = await db.providers.findOneAsync({name: 'espnplus'});
+  const provider = await db.providers.findOneAsync({name: 'example-provider'});
   return c.html(<UpdatedCardBody provider={provider} />);
 });
-```
-
-#### Authentication State Management
-```typescript
-// Check provider feature states
-const isEnabled = async (which: string) => {
-  const {enabled: espnPlusEnabled, meta: plusMeta} = 
-    await db.providers.findOneAsync({name: 'espnplus'});
-    
-  if (which === 'plus') {
-    return espnPlusEnabled;
-  } else if (which === 'ultimate') {
-    // Ultimate requires BOTH ESPN+ enabled AND ultimate subscription
-    return (plusMeta?.ultimate_subscription ? true : false) && espnPlusEnabled;
-  }
-};
 ```
 
 ## How to Add a New Provider
@@ -535,7 +420,7 @@ To add a new provider, "NewSport", you would follow this pattern:
 
 7.  **Create Debug Scripts**:
     -   Create `debug/newsport-handler/` directory with testing scripts
-    -   Follow the ESPN handler debug script patterns for comprehensive testing
+    -   Follow the other provider handler debug script patterns for comprehensive testing
     -   Test authentication flows, token refresh, and error handling
 
 8.  **Authentication Implementation**:
