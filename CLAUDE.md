@@ -19,7 +19,7 @@ EPlusTV is a Node.js application that aggregates sports streaming content from v
 
 **Key Concepts:**
 - **HLS Proxy Model**: Server acts as proxy between clients and providers
-- **Multi-Token Authentication**: Complex authentication with BAM + Adobe Pass tokens  
+- **Multi-Token Authentication**: Complex authentication depending on provider 
 - **Virtual Channel Scheduling**: Dynamic assignment of events to linear channels
 - **Provider Handler Pattern**: Modular provider implementations with standardized interfaces
 
@@ -56,12 +56,7 @@ EPlusTV is a Node.js application that aggregates sports streaming content from v
 
 **📖 See [ARCHITECTURE.md](./ARCHITECTURE.md#authentication-architecture-deep-dive) for detailed authentication patterns**
 
-**Multi-Token System**: Providers use complex authentication with multiple token types:
-
-**ESPN Example** - Dual authentication system:
-- **BAM Tokens**: Disney+/ESPN+ authentication (on-demand + ESPN Ultimate linear)
-- **Adobe Pass Tokens**: Traditional TV provider authentication (standard linear channels)  
-- **ESPN Ultimate**: Premium feature allowing BAM authentication for linear channels
+**Multi-Token System**: Providers use complex authentication with multiple token types
 
 **Key Patterns**:
 - **Dual Persistence**: Database + JSON files for reliability
@@ -154,7 +149,7 @@ export {provider};
 **Authentication Testing**:
 - Use `debug/espn-handler/test-with-real-tokens.ts` for real credential testing
 - See `debug/README.md` for token extraction from browsers and injection methods
-- Test both authentication paths (e.g., BAM vs Adobe Pass for ESPN)
+- Test different available authentication paths
 
 **Common Debugging Commands**:
 ```bash
