@@ -15,7 +15,7 @@ export const ESPNPlus: FC = async () => {
     <div>
       <section class="overflow-auto provider-section">
         <div class="grid-container">
-          <h4>ESPN+</h4>
+          <h4>ESPN Account</h4>
           <fieldset>
             <label>
               Enabled&nbsp;&nbsp;
@@ -49,20 +49,6 @@ export const ESPNPlus: FC = async () => {
               />
             </label>
           </fieldset>
-        </div>
-        <div class="grid-container">
-          <div />
-          <div>
-            <span>ESPN Ultimate:&nbsp;</span>
-            <span class={meta.ultimate_subscription ? 'success-green' : 'muted'}>
-              {meta.ultimate_subscription ? '✓ Detected' : '○ Not detected'}
-            </span>
-            {meta.ultimate_subscription && (
-              <small class="muted" style="display: block; margin-top: 4px;">
-                Auto-detected based on account entitlements
-              </small>
-            )}
-          </div>
         </div>
         <div class="grid">
           <details>
@@ -110,7 +96,7 @@ export const ESPNPlus: FC = async () => {
           </details>
         </div>
         <div id="espnplus-body" hx-swap="innerHTML">
-          <ESPNPlusBody enabled={enabled} tokens={tokens} />
+          <ESPNPlusBody enabled={enabled} tokens={tokens} meta={meta} />
         </div>
         <script
           dangerouslySetInnerHTML={{

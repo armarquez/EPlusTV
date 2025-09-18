@@ -7,6 +7,7 @@ import {IProvider} from '@/services/shared-interfaces';
 import {removeEntriesProvider, scheduleEntries} from '@/services/build-schedule';
 import {espnHandler, IEspnPlusMeta, TESPNPlusTokens} from '@/services/espn-handler';
 import {ESPNPlusBody} from './views/CardBody';
+import {SubscriptionIndicators} from './views/SubscriptionIndicators';
 
 export const espnplus = new Hono().basePath('/espnplus');
 
@@ -30,6 +31,7 @@ espnplus.put('/toggle', async c => {
     return c.html(<></>);
   }
 
+  await db.providers.updateAsync<IProvider, any>({name: 'espnplus'}, {$set: {enabled}});
   await espnHandler.refreshInMarketTeams();
 
   return c.html(<Login />);
@@ -44,11 +46,18 @@ espnplus.put('/toggle-ppv', async c => {
     {$set: {'meta.use_ppv': use_ppv}},
     {returnUpdatedDocs: true},
   );
-  const {enabled, tokens} = affectedDocuments as IProvider<TESPNPlusTokens, IEspnPlusMeta>;
+  const {enabled, tokens, meta} = affectedDocuments as IProvider<TESPNPlusTokens, IEspnPlusMeta>;
+
+  // Auto-refresh subscription status to ensure UI is up to date
+  try {
+    await espnHandler.detectSubscriptions();
+  } catch (error) {
+    console.log('⚠️ Subscription detection failed during PPV toggle:', error.message);
+  }
 
   scheduleEvents();
 
-  return c.html(<ESPNPlusBody enabled={enabled} tokens={tokens} />);
+  return c.html(<ESPNPlusBody enabled={enabled} tokens={tokens} meta={meta} />);
 });
 
 espnplus.put('/refresh-in-market-teams', async c => {
@@ -79,6 +88,13 @@ espnplus.put('/toggle-studio', async c => {
     {$set: {'meta.hide_studio': hide_studio}},
   );
 
+  // Auto-refresh subscription status to ensure UI is up to date
+  try {
+    await espnHandler.detectSubscriptions();
+  } catch (error) {
+    console.log('⚠️ Subscription detection failed during studio toggle:', error.message);
+  }
+
   return c.html(<></>);
 });
 
@@ -96,16 +112,41 @@ espnplus.get('/login/check/:code', async c => {
     {$set: {enabled: true}},
     {returnUpdatedDocs: true},
   );
-  const {tokens} = affectedDocuments as IProvider<TESPNPlusTokens, IEspnPlusMeta>;
+  let {tokens, meta} = affectedDocuments as IProvider<TESPNPlusTokens, IEspnPlusMeta>;
+
+  // Auto-detect subscriptions after successful login
+  try {
+    console.log('🔄 Auto-detecting ESPN subscriptions after login...');
+    await espnHandler.detectSubscriptions();
+
+    // Get updated provider data with latest subscription status
+    const updatedProvider = await db.providers.findOneAsync<IProvider<TESPNPlusTokens, IEspnPlusMeta>>({
+      name: 'espnplus',
+    });
+    tokens = updatedProvider.tokens;
+    meta = updatedProvider.meta;
+
+    console.log('✅ Subscription detection completed after login');
+  } catch (error) {
+    console.log('⚠️ Subscription detection failed after login:', error.message);
+  }
 
   // Kickoff event scheduler
   scheduleEvents();
 
-  return c.html(<ESPNPlusBody enabled={true} tokens={tokens} open={true} />, 200, {
+  return c.html(<ESPNPlusBody enabled={true} tokens={tokens} meta={meta} open={true} />, 200, {
     'HX-Trigger': `{"HXToast":{"type":"success","body":"Successfully enabled ESPN+"}}`,
   });
 });
 
 espnplus.put('/reauth', async c => {
   return c.html(<Login />);
+});
+
+espnplus.get('/subscription-indicators', async c => {
+  const {meta} = await db.providers.findOneAsync<IProvider<TESPNPlusTokens, IEspnPlusMeta>>({
+    name: 'espnplus',
+  });
+
+  return c.html(<SubscriptionIndicators meta={meta} />);
 });

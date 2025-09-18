@@ -117,6 +117,7 @@ export interface IEspnPlusMeta {
   zip_code?: string;
   in_market_teams?: string;
   ultimate_subscription?: boolean;
+  espn_plus_subscription?: boolean;
 }
 
 export interface IEspnMeta {
@@ -500,6 +501,7 @@ class EspnHandler {
       await db.providers.insertAsync<IProvider<TESPNPlusTokens, IEspnPlusMeta>>({
         enabled: useEspnPlus,
         meta: {
+          espn_plus_subscription: false,
           hide_studio: false,
           in_market_teams: '',
           ultimate_subscription: false,
@@ -634,10 +636,10 @@ class EspnHandler {
       await this.getAppConfig();
     }
 
-    // Auto-detect ESPN Ultimate subscription if not already enabled
-    if (!plusMeta?.ultimate_subscription && (await isEnabled('plus'))) {
-      console.log('Attempting to auto-detect ESPN Ultimate subscription...');
-      await this.detectUltimateSubscription();
+    // Auto-detect ESPN subscriptions (ESPN+ and Ultimate)
+    if (await isEnabled('plus')) {
+      console.log('Attempting to auto-detect ESPN subscriptions...');
+      await this.detectSubscriptions();
     }
   };
 
@@ -1236,9 +1238,9 @@ class EspnHandler {
     }
   };
 
-  public detectUltimateSubscription = async (): Promise<boolean> => {
+  public detectSubscriptions = async (): Promise<{espnPlus: boolean; ultimate: boolean}> => {
     try {
-      console.log('🎯 Detecting ESPN Ultimate subscription via entitlements...');
+      console.log('🎯 Detecting ESPN subscriptions via entitlements...');
 
       // Check if we have ESPN+ enabled with BAM tokens
       const {enabled: espnPlusEnabled, tokens: plusTokens} = await db.providers.findOneAsync<
@@ -1246,16 +1248,16 @@ class EspnHandler {
       >({name: 'espnplus'});
 
       if (!espnPlusEnabled || !plusTokens?.tokens?.id_token) {
-        console.log('Cannot detect Ultimate: ESPN+ not enabled or no BAM tokens');
-        return false;
+        console.log('Cannot detect subscriptions: ESPN+ not enabled or no BAM tokens');
+        return {espnPlus: false, ultimate: false};
       }
 
       // Ensure we have the necessary tokens
       await this.getBamAccessToken();
 
       if (!this.account_token) {
-        console.log('Cannot detect Ultimate: Missing BAM account token');
-        return false;
+        console.log('Cannot detect subscriptions: Missing BAM account token');
+        return {espnPlus: false, ultimate: false};
       }
 
       // Query the BAM device GraphQL endpoint to get entitlements using account access token
@@ -1298,37 +1300,91 @@ class EspnHandler {
         if (entitlements && Array.isArray(entitlements)) {
           console.log('✅ Retrieved entitlements:', entitlements);
 
+          // Check for ESPN+ entitlements
+          const hasEspnPlus = entitlements.some(
+            entitlement =>
+              entitlement === 'ESPN_PLUS' || entitlement === 'espn_plus_sub:base' || entitlement.includes('espn_plus'),
+          );
+
           // Check for ESPN Ultimate/Flagship entitlements
           const hasUltimate = entitlements.some(
             entitlement =>
               entitlement === 'ESPN_FLAGSHIP' || entitlement === 'espn:flagship' || entitlement.includes('flagship'),
           );
 
+          if (hasEspnPlus) {
+            console.log('✅ ESPN+ subscription detected: Found ESPN_PLUS entitlement');
+          } else {
+            console.log('❌ ESPN+ not found in entitlements');
+          }
+
           if (hasUltimate) {
             console.log('✅ ESPN Ultimate subscription detected: Found ESPN_FLAGSHIP entitlement');
-
-            // Auto-enable Ultimate subscription
-            await db.providers.updateAsync({name: 'espnplus'}, {$set: {'meta.ultimate_subscription': true}});
-
-            console.log('🔧 ESPN Ultimate subscription automatically enabled');
-            return true;
           } else {
             console.log('❌ ESPN Ultimate not found in entitlements');
-            console.log('   Available entitlements:', entitlements);
-            return false;
           }
+
+          console.log('   Available entitlements:', entitlements);
+
+          // Update database with detected subscriptions
+          const updates = {};
+          if (hasEspnPlus !== undefined) {
+            updates['meta.espn_plus_subscription'] = hasEspnPlus;
+          }
+          if (hasUltimate !== undefined) {
+            updates['meta.ultimate_subscription'] = hasUltimate;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            await db.providers.updateAsync({name: 'espnplus'}, {$set: updates});
+            console.log('🔧 ESPN subscription status automatically updated');
+          }
+
+          // Auto-enable ESPN linear channels for Ultimate subscribers
+          if (hasUltimate) {
+            console.log('🔄 Auto-enabling ESPN linear channels for Ultimate subscription...');
+            const espnProvider = await db.providers.findOneAsync({name: 'espn'});
+
+            if (espnProvider) {
+              // Enable all ESPN linear channels
+              const updatedChannels =
+                espnProvider.linear_channels?.map(channel => ({
+                  ...channel,
+                  enabled: true,
+                })) || [];
+
+              await db.providers.updateAsync(
+                {name: 'espn'},
+                {
+                  $set: {
+                    enabled: true,
+                    linear_channels: updatedChannels,
+                  },
+                },
+              );
+
+              console.log('✅ ESPN linear provider and channels automatically enabled for Ultimate subscription');
+            }
+          }
+
+          return {espnPlus: hasEspnPlus, ultimate: hasUltimate};
         } else {
           console.log('❌ No entitlements data found in response');
-          return false;
+          return {espnPlus: false, ultimate: false};
         }
       } catch (bamError) {
         console.log('❌ Failed to query BAM entitlements endpoint:', bamError.message);
-        return false;
+        return {espnPlus: false, ultimate: false};
       }
     } catch (e) {
-      console.log('Could not detect Ultimate subscription:', e.message);
-      return false;
+      console.log('Could not detect subscriptions:', e.message);
+      return {espnPlus: false, ultimate: false};
     }
+  };
+
+  public detectUltimateSubscription = async (): Promise<boolean> => {
+    const {ultimate} = await this.detectSubscriptions();
+    return ultimate;
   };
 
   public ispAccess = async (): Promise<boolean> => {
